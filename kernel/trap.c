@@ -65,6 +65,25 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 13 || r_scause() == 15){
+    int val = r_stval();
+    struct proc *p = myproc();
+    if(val >= p->sz || (val < PGROUNDDOWN(p->trapframe->sp) && val >= PGROUNDDOWN(p->trapframe->sp) - PGSIZE)){
+      p->killed = 1;
+    } else {
+      val = PGROUNDDOWN(val);
+      uint64 mem = (uint64) kalloc();
+      if(mem == 0){
+        p->killed = 1;
+      } else {
+        pte_t *pte = walk(p->pagetable, val, 1);
+        if(pte == 0){
+          p->killed = 1;
+        } else {
+          *pte = PA2PTE(mem) | PTE_V | PTE_U | PTE_R | PTE_W;
+        }
+      }
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

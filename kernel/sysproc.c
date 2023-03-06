@@ -41,14 +41,27 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
   int n;
+  int addr;
+  struct proc *p = myproc();
 
   if(argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  addr = p->sz;
+
+
+  if (n > 0) {
+    if (addr + n >= TRAPFRAME){
+      return -1;
+    }
+    p->sz += n;
+    return addr;
+  } else if (n < 0) {
+    if (addr + n < PGROUNDUP(p->trapframe->sp)){
+      return -1;
+    }
+    p->sz = uvmdealloc(p->pagetable, p->sz, p->sz + n);
+  }
   return addr;
 }
 
