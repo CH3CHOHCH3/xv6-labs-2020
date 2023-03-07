@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -386,7 +388,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  /*uint64 n, va0, pa0;
 
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
@@ -402,7 +404,8 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     dst += n;
     srcva = va0 + PGSIZE;
   }
-  return 0;
+  return 0;*/
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -412,7 +415,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
+  /*uint64 n, va0, pa0;
   int got_null = 0;
 
   while(got_null == 0 && max > 0){
@@ -445,7 +448,8 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
-  }
+  }*/
+  return copyinstr_new(pagetable, dst, srcva, max);
 }
 
 // 打印页表项
@@ -467,5 +471,25 @@ void vmprint(pagetable_t pagetable, int dep){
         vmprint((pagetable_t)child, dep + 1);
       }
     }
+  }
+}
+
+// 把进程 p 从 begin 到 end 这段虚拟地址映射到该进程的内核页表
+void ukmap(struct proc *p, uint64 begin, uint64 end){
+  if(end >= PLIC){
+    panic("ukmap: user address space shouldn't be higher than PLIC");
+  }
+  end = PGROUNDUP(end);
+  begin =  PGROUNDDOWN(begin);
+  for(uint64 va = begin; va < end; va += PGSIZE){
+    pte_t *u_pte = walk(p->pagetable, va, 0);
+    if(u_pte == 0 || (*u_pte & PTE_V) == 0){
+      panic("ukmap: u_pte should exist.");
+    }
+    pte_t *k_pte = walk(p->kpagetable, va, 1);
+    if(k_pte == 0){
+      panic("ukmap: cannot allocate k_pte.");
+    }
+    *k_pte = *u_pte&(~PTE_U);
   }
 }
