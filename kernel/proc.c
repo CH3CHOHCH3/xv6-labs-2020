@@ -20,6 +20,7 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern pagetable_t kernel_pagetable; // global kernel pagetable
 
 // initialize the proc table at boot time.
 void
@@ -120,6 +121,23 @@ found:
     release(&p->lock);
     return 0;
   }
+  // 让每个进程的内核页表直接复用全局内核页表；
+  p->kpagetable = uvmcreate();
+  if(p->kpagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  // 全局内核页表的第一个一级 PTE 占用 0x4000_0000
+  // 内核在这个地址以下的部分要重新映射；
+  // 最终 PLIC 以下的地址空间给进程用；
+  // CLINT 是 M 模式处理时钟的，不用映射；
+  for(int i = 1; i < 512; ++i){
+    p->kpagetable[i] = kernel_pagetable[i];
+  }
+  ukvmmap(p->kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(p->kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  ukvmmap(p->kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -142,6 +160,21 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  if(p->kpagetable){
+    // 页表项：只需要释放第一个一级页表项；
+    // 物理内存：不需要释放任何物理内存；
+    pagetable_t lv2 = (pagetable_t)PTE2PA(p->kpagetable[0]);
+    for(int i = 0; i < 512; ++i){
+      pte_t pte = lv2[i];
+      if(pte & PTE_V){
+        uint64 lv3 = PTE2PA(pte);
+        kfree((void*)lv3);
+      }
+    }
+    kfree((void*)lv2);
+    kfree((void*)p->kpagetable);
+  }
+  p->kpagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -473,8 +506,12 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        // 切换到目标进程的内核页表
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
-
+        w_satp(MAKE_SATP(kernel_pagetable));
+        sfence_vma();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
